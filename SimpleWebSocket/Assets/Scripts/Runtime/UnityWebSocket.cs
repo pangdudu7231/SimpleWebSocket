@@ -10,15 +10,19 @@ namespace SimpleWebSocket
     /// <summary>
     ///     WebSocket类
     /// </summary>
-    public sealed class WebSocket : IDisposable
+    public sealed class UnityWebSocket : IDisposable
     {
         private const int RECEIVE_BUFF_SIZE = 1024; //接收数据buff的大小
+        private const int MILLISECONDS_DELTA = 1000 * 60 * 5; //向服务器发送ping的时间间隔
+        private const string PING_STR = "ping";
+        private const string PONG_STR = "pong";
 
         #region private fields
 
         private readonly string _address; //地址
         private readonly CancellationTokenSource _cts;
-        private ClientWebSocket _webSocket;
+        private readonly ClientWebSocket _webSocket;
+        private bool _isSending; //是否正在发送消息
 
         #endregion
 
@@ -41,12 +45,27 @@ namespace SimpleWebSocket
 
         #endregion
 
+        #region public properties
+
+        /// <summary>
+        ///     websocket是否打开了
+        /// </summary>
+        public bool IsOpen => _webSocket.State == WebSocketState.Open;
+
+        /// <summary>
+        ///     websocket是否关闭了
+        /// </summary>
+        public bool IsClosed => _webSocket.State == WebSocketState.Closed;
+
+        #endregion
+
         #region ctor
 
-        public WebSocket(string address)
+        public UnityWebSocket(string address)
         {
             _address = address;
             _cts = new CancellationTokenSource();
+            _webSocket = new ClientWebSocket();
         }
 
         #endregion
@@ -59,13 +78,13 @@ namespace SimpleWebSocket
         /// <exception cref="InvalidOperationException"></exception>
         public async Task ConnectAsync()
         {
-            _webSocket ??= new ClientWebSocket();
             if (_webSocket.State == WebSocketState.Open)
                 throw new InvalidOperationException("Web socket is opened.");
 
             var uri = new Uri(_address);
             await _webSocket.ConnectAsync(uri, _cts.Token);
             StartReceiveMessageAsync();
+            StartSendPingAsync();
         }
 
         /// <summary>
@@ -78,8 +97,11 @@ namespace SimpleWebSocket
             if (_webSocket.State != WebSocketState.Open)
                 throw new InvalidOperationException("Web socket is not opened.");
 
+            while (_isSending) await Task.Delay(200); //等待上一次数据发送完毕
+            _isSending = true;
             foreach (var data in dataList)
-                await _webSocket.SendAsync(data, WebSocketMessageType.Text, true, _cts.Token);
+                await _webSocket.SendAsync(data, WebSocketMessageType.Binary, true, _cts.Token);
+            _isSending = false;
         }
 
         /// <summary>
@@ -92,8 +114,11 @@ namespace SimpleWebSocket
             if (_webSocket.State != WebSocketState.Open)
                 throw new InvalidOperationException("Web socket is not opened.");
 
+            while (_isSending) await Task.Delay(200); //等待上一次数据发送完毕
+            _isSending = true;
             foreach (var msg in messages)
                 await _webSocket.SendAsync(Encoding.UTF8.GetBytes(msg), WebSocketMessageType.Text, true, _cts.Token);
+            _isSending = false;
         }
 
         /// <summary>
@@ -105,7 +130,6 @@ namespace SimpleWebSocket
                 throw new InvalidOperationException("Web socket is not opened.");
 
             await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "NormalClosure", _cts.Token);
-            _cts.Cancel();
         }
 
         public void Dispose()
@@ -141,6 +165,8 @@ namespace SimpleWebSocket
                     {
                         case WebSocketMessageType.Text:
                         case WebSocketMessageType.Binary:
+                            if (Encoding.UTF8.GetString(data) == PONG_STR) break; // 服务器回的pong消息
+
                             OnReceive?.Invoke(this, new MessageEventArgs(messageType, data));
                             break;
                         case WebSocketMessageType.Close:
@@ -164,6 +190,18 @@ namespace SimpleWebSocket
                 stream.Close();
                 _cts.Cancel();
                 Dispose();
+            }
+        }
+
+        /// <summary>
+        ///     开始向服务器发送ping消息
+        /// </summary>
+        private async void StartSendPingAsync()
+        {
+            while (_webSocket.State == WebSocketState.Open)
+            {
+                await Task.Delay(MILLISECONDS_DELTA);
+                await SendAsync(PING_STR); //向服务器发送ping消息，防止服务器清理客户端的连接
             }
         }
 
