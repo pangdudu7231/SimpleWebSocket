@@ -13,9 +13,6 @@ namespace SimpleWebSocket
     public sealed class UnityWebSocket : IDisposable
     {
         private const int RECEIVE_BUFF_SIZE = 1024; //接收数据buff的大小
-        private const int MILLISECONDS_DELTA = 1000 * 60 * 5; //向服务器发送ping的时间间隔
-        private const string PING_STR = "ping";
-        private const string PONG_STR = "pong";
 
         #region private fields
 
@@ -84,7 +81,6 @@ namespace SimpleWebSocket
             var uri = new Uri(_address);
             await _webSocket.ConnectAsync(uri, _cts.Token);
             StartReceiveMessageAsync();
-            StartSendPingAsync();
         }
 
         /// <summary>
@@ -99,9 +95,15 @@ namespace SimpleWebSocket
 
             while (_isSending) await Task.Delay(200); //等待上一次数据发送完毕
             _isSending = true;
-            foreach (var data in dataList)
-                await _webSocket.SendAsync(data, WebSocketMessageType.Binary, true, _cts.Token);
-            _isSending = false;
+            try
+            {
+                foreach (var data in dataList)
+                    await _webSocket.SendAsync(data, WebSocketMessageType.Binary, true, _cts.Token);
+            }
+            finally
+            {
+                _isSending = false;
+            }
         }
 
         /// <summary>
@@ -116,9 +118,16 @@ namespace SimpleWebSocket
 
             while (_isSending) await Task.Delay(200); //等待上一次数据发送完毕
             _isSending = true;
-            foreach (var msg in messages)
-                await _webSocket.SendAsync(Encoding.UTF8.GetBytes(msg), WebSocketMessageType.Text, true, _cts.Token);
-            _isSending = false;
+            try
+            {
+                foreach (var msg in messages)
+                    await _webSocket.SendAsync(Encoding.UTF8.GetBytes(msg), WebSocketMessageType.Text, true,
+                        _cts.Token);
+            }
+            finally
+            {
+                _isSending = false;
+            }
         }
 
         /// <summary>
@@ -165,8 +174,6 @@ namespace SimpleWebSocket
                     {
                         case WebSocketMessageType.Text:
                         case WebSocketMessageType.Binary:
-                            if (Encoding.UTF8.GetString(data) == PONG_STR) break; // 服务器回的pong消息
-
                             OnReceive?.Invoke(this, new MessageEventArgs(messageType, data));
                             break;
                         case WebSocketMessageType.Close:
@@ -183,25 +190,13 @@ namespace SimpleWebSocket
             catch (Exception ex)
             {
                 OnError?.Invoke(this, new ErrorEventArgs(ex));
-                OnClose?.Invoke(this, new CloseEventArgs(ex.Message));
+                OnClose?.Invoke(this, new CloseEventArgs(WebSocketCloseStatus.NormalClosure, ex.Message));
             }
             finally
             {
                 stream.Close();
                 _cts.Cancel();
                 Dispose();
-            }
-        }
-
-        /// <summary>
-        ///     开始向服务器发送ping消息
-        /// </summary>
-        private async void StartSendPingAsync()
-        {
-            while (_webSocket.State == WebSocketState.Open)
-            {
-                await Task.Delay(MILLISECONDS_DELTA);
-                await SendAsync(PING_STR); //向服务器发送ping消息，防止服务器清理客户端的连接
             }
         }
 
