@@ -1,2 +1,3 @@
 # SimpleWebSocket
 Unity的websocket插件
+UnityWebSocket是对ClientWebSocket的扩写
